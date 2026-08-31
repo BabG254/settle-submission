@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+state/
+data/
+outputs/
+results/pred_*/
+trajectories/*.jsonl
+trajectories/core/
+trajectories/full/
+trajectories/demo/
