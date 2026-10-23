@@ -66,6 +66,10 @@ def unique_global_matches(invoices: list[Invoice], txns: list[Txn], *,
     Ambiguity is deliberately escalated rather than resolved arbitrarily.
     The bounded search fails closed if its budget is exceeded.
     """
+    # Exponential global search: refuse oversized instances instead of
+    # consuming unbounded memory or blocking financial workflows.
+    if len(invoices) > 16:
+        return {}
     options = {}
     for inv in invoices:
         options[inv.invoice_id] = subset_solver(
