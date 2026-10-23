@@ -109,3 +109,49 @@ def unique_global_matches(invoices: list[Invoice], txns: list[Txn], *,
     first = optimal[0]
     return {invoice: receipts for invoice, receipts in first.items()
             if all(candidate.get(invoice) == receipts for candidate in optimal)}
+
+def reconcile_case(case):
+    """Run conservative offline matching and bank verification for a Case."""
+    from .tools import check_ledger
+
+    matching = unique_global_matches(case.invoices, case.txns)
+    ledger = check_ledger(matching, case.invoices, case.txns)
+    if not ledger.ok:
+        raise ValueError("global matching violated ledger invariants: " + ledger.summary())
+    settlement = verify_settlements(case.bank, case.txns)
+    unresolved = [i.invoice_id for i in case.invoices if i.invoice_id not in matching]
+    return {
+        "case_id": case.case_id,
+        "matching": matching,
+        "exceptions": [{"invoice_id": i, "reason": "global matching is ambiguous or unavailable"}
+                       for i in unresolved],
+        "ledger_ok": ledger.ok,
+        "bank_settlement_ok": settlement.ok,
+        "bank_settlement_errors": settlement.errors,
+        "bank_lines_checked": settlement.checked,
+    }
+
+
+def main() -> None:
+    import argparse
+    import json
+    from pathlib import Path
+    from .schema import read_case
+
+    parser = argparse.ArgumentParser(description="Conservative offline reconciliation")
+    parser.add_argument("--case", type=Path, required=True,
+                        help="Directory with invoices and statement CSV files")
+    parser.add_argument("--out", type=Path,
+                        help="Optional output JSON; defaults to printing JSON")
+    args = parser.parse_args()
+    result = reconcile_case(read_case(args.case))
+    text = json.dumps(result, indent=2)
+    if args.out:
+        from .approval_safety import atomic_write_json
+        atomic_write_json(args.out, result)
+    else:
+        print(text)
+
+
+if __name__ == "__main__":
+    main()
