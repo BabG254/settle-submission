@@ -1,7 +1,7 @@
 """Independent examples of global ambiguity and settlement integrity."""
 import unittest
-from settle.reconcile import unique_global_matches, verify_settlements
-from settle.schema import BankLine, Invoice, Txn
+from settle.reconcile import reconcile_case, unique_global_matches, verify_settlements
+from settle.schema import BankLine, Case, Invoice, Txn
 
 
 def invoice(i, amount):
@@ -59,6 +59,15 @@ class SettlementTests(unittest.TestCase):
         self.assertFalse(verify_settlements(
             [BankLine("B", "2026-01-03", "", 100, ["R"])],
             [txn("R", 100), txn("REV", 0, "reversal", "R")]).ok)
+
+    def test_end_to_end_offline_case(self):
+        case = Case("sample", [invoice("A", 100)], [txn("R", 100)],
+                    [BankLine("B", "2026-01-03", "", 100, ["R"])], [])
+        result = reconcile_case(case)
+        self.assertTrue(result["ledger_ok"])
+        self.assertTrue(result["bank_settlement_ok"])
+        self.assertEqual(result["matching"], {"A": ["R"]})
+        self.assertEqual(result["exceptions"], [])
 
 
 if __name__ == "__main__":
