@@ -257,6 +257,9 @@ def check_ledger(matching: dict[str, list[str]], invoices: list[Invoice],
             if r in dead:
                 errors.append(f"{inv_id}: receipt {r} was reversed - never received")
                 continue
+            if by_receipt[r].kind != "pay_bill":
+                errors.append(f"{inv_id}: receipt {r} is not a pay_bill transaction")
+                continue
             if r in seen:
                 errors.append(f"{inv_id}: receipt {r} already used by {seen[r]}")
                 continue
