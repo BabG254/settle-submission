@@ -15,12 +15,13 @@ import argparse
 import json
 from pathlib import Path
 
+from .approval_safety import ApprovalError, atomic_write_json, validate_approval, locked_prediction
 from .memory import AliasMemory
 from .schema import read_case
 from .tools import check_ledger
 
 
-def main() -> None:
+def _main() -> None:
     ap = argparse.ArgumentParser(description="Approve or reject a queued exception.")
     ap.add_argument("--pred", type=Path, required=True)
     ap.add_argument("--data", type=Path, required=True)
@@ -55,7 +56,7 @@ def main() -> None:
 
     if args.reject:
         exc["resolution"] = "rejected: invoice genuinely unpaid"
-        args.pred.write_text(json.dumps(pred, indent=2), encoding="utf-8")
+        atomic_write_json(args.pred, pred)
         print(f"{args.invoice}: marked unpaid, no alias written")
         return
 
@@ -67,36 +68,40 @@ def main() -> None:
         raise SystemExit("give --option or --receipts (or --list to see the queue)")
 
     inv = by_i[args.invoice]
-    trial = dict(pred["matching"])
-    trial[args.invoice] = receipts
-    report = check_ledger(trial, case.invoices, case.txns)
-    if not report.ok:
-        # The gate applies to humans too. An approval that unbalances the ledger
-        # is refused, not accepted with a warning.
-        raise SystemExit("approval refused by the ledger gate:\n" + report.summary())
+    try:
+        updated = validate_approval(pred, case, args.invoice, receipts)
+    except ApprovalError as exc:
+        raise SystemExit(str(exc)) from exc
 
+    # Persist verified financial state before touching the alias cache.
+    # If memory fails, the approval remains durable and can be rebuilt;
+    # a failed approval never teaches the alias store.
+    atomic_write_json(args.pred, updated)
     memory = AliasMemory(args.memory_db)
     payers = sorted({by_r[r].party_name for r in receipts})
     written = []
     for p in payers:
         if memory.remember(p, inv.customer_id, inv.customer_name,
                            source="human_approval",
-                           evidence=f"approved on {inv.invoice_id} "
-                                    f"(KES {inv.amount:,})"):
+                           evidence=f"approved on {inv.invoice_id} (KES {inv.amount:,})"):
             written.append(p)
-
-    pred["matching"] = trial
-    pred["exceptions"] = [e for e in pred["exceptions"]
-                          if e["invoice_id"] != args.invoice]
-    pred.setdefault("human_approvals", []).append(
-        {"invoice_id": args.invoice, "receipts": receipts, "aliases_learned": written})
-    args.pred.write_text(json.dumps(pred, indent=2), encoding="utf-8")
+    report = check_ledger(updated["matching"], case.invoices, case.txns)
 
     print(f"{args.invoice}: posted {', '.join(receipts)}")
     print(f"  ledger: {report.summary()}")
     for p in written:
         print(f"  learned: {p!r} -> {inv.customer_name} ({inv.customer_id})")
     print(f"  alias store now holds {memory.size()} approved identities")
+
+
+def main() -> None:
+    # Acquire a per-prediction lock before loading current state, and hold it
+    # through validation, durable write, and alias updates.
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--pred", type=Path, required=True)
+    args, _ = parser.parse_known_args()
+    with locked_prediction(args.pred):
+        _main()
 
 
 if __name__ == "__main__":

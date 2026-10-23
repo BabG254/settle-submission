@@ -54,7 +54,11 @@ def _log(record: dict) -> None:
     if _TRACE is None:
         return
     with _TRACE.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record) + "\n")
+        from .privacy import redact
+        # Redact before data reaches disk; raw diagnostic traces should only
+        # be used with synthetic data and explicit operator authorization.
+        safe = redact(json.dumps(record, ensure_ascii=False))
+        fh.write(safe + "\n")
 
 
 def trace_event(kind: str, **payload) -> None:

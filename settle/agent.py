@@ -32,6 +32,7 @@ from pathlib import Path
 
 from .llm import call_model, parse_json, price, set_trace, trace_event
 from .memory import AliasMemory
+from .reconcile import unique_global_matches, verify_settlements
 from .schema import Case, Invoice, Txn, read_case, read_truth
 from .tools import (
     Candidate, check_ledger, propose_candidates, subset_coherence, subset_solver,
@@ -174,7 +175,9 @@ class Settle:
     def __init__(self, *, model: str, use_adjudicator: bool = True,
                  use_verifier: bool = True, memory: AliasMemory | None = None,
                  use_gate: bool = True, full_context: bool = False,
-                 identity_oracle: dict[str, list[str]] | None = None):
+                 identity_oracle: dict[str, list[str]] | None = None,
+                 global_matching: bool = False):
+        self.global_matching = global_matching
         self.model = model
         self.use_adjudicator = use_adjudicator
         self.use_verifier = use_verifier
@@ -364,6 +367,9 @@ class Settle:
         routes: dict[str, int] = {}
         pending_aliases: list[tuple[str, str, str, str, str]] = []
 
+        global_matches = (unique_global_matches(case.invoices, case.txns)
+                          if self.global_matching else {})
+
         # Process least-ambiguous invoices first so confident matches claim
         # their transactions before contested ones do.
         order = sorted(
@@ -372,7 +378,18 @@ class Settle:
                 i.amount, propose_candidates(i, case.txns, memory=self.memory))) or 99)
 
         for inv in order:
-            res = self.resolve(inv, case.txns, used)
+            if self.global_matching:
+                if inv.invoice_id in global_matches:
+                    res = {"decision": "match",
+                           "receipts": global_matches[inv.invoice_id],
+                           "route": "global_unique", "confidence": 0.0,
+                           "reasoning": "Unique across maximum-cardinality assignments"}
+                else:
+                    res = {"decision": "escalate", "route": "global_ambiguous",
+                           "reason": "No globally unambiguous assignment",
+                           "auto_guess": [], "options": [], "candidates": []}
+            else:
+                res = self.resolve(inv, case.txns, used)
             routes[res.get("route", "?")] = routes.get(res.get("route", "?"), 0) + 1
             if res["decision"] == "match":
                 matching[inv.invoice_id] = res["receipts"]
@@ -426,7 +443,12 @@ class Settle:
         if self.use_gate and ledger_ok:
             self._commit_verified_aliases(pending_aliases, matching)
 
+        settlement = verify_settlements(case.bank, case.txns)
         return {
+            "bank_settlement_ok": settlement.ok,
+            "bank_settlement_errors": settlement.errors,
+            "bank_lines_checked": settlement.checked,
+            "global_matching_enabled": self.global_matching,
             "case_id": case.case_id,
             "system": self._label(),
             "matching": matching,
@@ -504,6 +526,10 @@ def main() -> None:
     ap.add_argument("--no-verifier", action="store_true")
     ap.add_argument("--no-memory", action="store_true")
     ap.add_argument("--no-gate", action="store_true")
+    ap.add_argument("--global-matching", action="store_true",
+                    help="Use conservative global assignment; escalate ambiguous invoices")
+    ap.add_argument("--require-bank-settlement", action="store_true",
+                    help="Fail a case if explicitly linked bank settlement checks fail")
     ap.add_argument("--full-context", action="store_true")
     ap.add_argument("--reset-memory", action="store_true")
     ap.add_argument("--identity-oracle", action="store_true",
@@ -541,9 +567,13 @@ def main() -> None:
                         use_verifier=not args.no_verifier,
                         memory=memory,
                         use_gate=not args.no_gate,
-                        full_context=args.full_context)
+                        full_context=args.full_context,
+                        global_matching=args.global_matching)
         try:
             pred = engine.run(case)
+            if args.require_bank_settlement and not pred["bank_settlement_ok"]:
+                raise ValueError("bank settlement verification failed: "
+                                 + "; ".join(pred["bank_settlement_errors"]))
         except Exception as exc:                                # noqa: BLE001
             # One bad case must not discard the cases already paid for.
             failures.append((case.case_id, f"{type(exc).__name__}: {exc}"))
