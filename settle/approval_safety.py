@@ -59,24 +59,6 @@ def atomic_write_json(path: Path, value: dict) -> None:
             temp.unlink()
 
 def locked_prediction(path: Path):
-    """POSIX exclusive advisory lock for one prediction file.
-
-    Caller must hold the context until the validated update is persisted.
-    Windows deployments require a compatible lock backend before concurrent use.
-    """
-    from contextlib import contextmanager
-    @contextmanager
-    def acquire():
-        try:
-            import fcntl
-        except ImportError as exc:
-            raise RuntimeError("concurrent approvals require POSIX fcntl locking") from exc
-        lock_path = path.with_name(path.name + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    return acquire()
+    """Portable exclusive lock for a prediction's full read-modify-write cycle."""
+    from .locking import file_lock
+    return file_lock(path.with_name(path.name + ".lock"))
