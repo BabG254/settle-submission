@@ -9,9 +9,7 @@ not a claim that Settle is certified accounting or payment software.
 invoice-to-receipt choices jointly. It only returns assignments shared by
 **every maximum-cardinality feasible solution**. Ambiguous assignments are left
 unresolved, not guessed. It uses bounded backtracking and fails closed when
-the node limit is reached. This function does not automatically replace the
-legacy sequential agent path. A future integration must define how unresolved
-invoices are surfaced to the exception queue and benchmark performance.
+the node limit is reached. The integrated offline command is `python -m settle.reconcile --case data/case01 --out outputs/global-case01.json` after `make data`. It reports ambiguous invoices as exceptions, verifies global ledger constraints and checks linked bank settlement batches. It does not replace the existing AI-assisted `settle.agent` command; its standalone path is deliberately conservative. Benchmarking performance remains future work.
 
 ## Bank settlement checks
 
