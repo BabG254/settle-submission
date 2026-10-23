@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
 .env
-.env.example
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 state/
 data/
 outputs/
