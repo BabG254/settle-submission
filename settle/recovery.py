@@ -46,3 +46,21 @@ def recover_approvals(pred_path: Path, data_root: Path, db_path: Path) -> dict:
         finally:
             memory.conn.close()
         return {"aliases_recovered": recovered, "conflicts": conflicts}
+
+
+def main() -> None:
+    """Repair missing approved aliases using an already-saved prediction."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Recover approved alias memory")
+    parser.add_argument("--pred", type=Path, required=True)
+    parser.add_argument("--data", type=Path, required=True)
+    parser.add_argument("--memory-db", type=Path, default=Path("state/aliases.db"))
+    args = parser.parse_args()
+    result = recover_approvals(args.pred, args.data, args.memory_db)
+    print(json.dumps(result, indent=2))
+    if result["conflicts"]:
+        raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    main()
