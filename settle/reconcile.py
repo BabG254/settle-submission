@@ -74,17 +74,26 @@ def unique_global_matches(invoices: list[Invoice], txns: list[Txn], *,
     for inv in invoices:
         options[inv.invoice_id] = subset_solver(
             inv.amount, propose_candidates(inv, txns), max_results=8)
-    solutions: list[dict[str, list[str]]] = []
+    # Track the intersection of optimal assignments rather than storing every
+    # solution (which can consume considerable memory on ambiguous inputs).
+    best = -1
+    shared: dict[str, list[str]] = {}
     nodes = 0
     ordered = sorted(invoices, key=lambda inv: (len(options[inv.invoice_id]), inv.invoice_id))
 
     def visit(index: int, used: set[str], chosen: dict[str, list[str]]) -> None:
-        nonlocal nodes
+        nonlocal nodes, best, shared
         nodes += 1
         if nodes > maximum_nodes:
             raise OverflowError("global matching search budget exceeded")
         if index == len(ordered):
-            solutions.append(dict(chosen))
+            size = len(chosen)
+            if size > best:
+                best = size
+                shared = dict(chosen)
+            elif size == best:
+                shared = {k: v for k, v in shared.items()
+                          if chosen.get(k) == v}
             return
         inv = ordered[index]
         choices = options[inv.invoice_id]
@@ -104,15 +113,7 @@ def unique_global_matches(invoices: list[Invoice], txns: list[Txn], *,
         visit(0, set(), {})
     except OverflowError:
         return {}
-    if not solutions:
-        return {}
-    # Prefer assignments maximizing the number of resolved invoices. Do not
-    # break ties by arbitrary ordering: keep only universally shared matches.
-    best = max(map(len, solutions))
-    optimal = [s for s in solutions if len(s) == best]
-    first = optimal[0]
-    return {invoice: receipts for invoice, receipts in first.items()
-            if all(candidate.get(invoice) == receipts for candidate in optimal)}
+    return shared if best >= 0 else {}
 
 def reconcile_case(case):
     """Run conservative offline matching and bank verification for a Case."""
