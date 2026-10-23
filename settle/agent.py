@@ -335,6 +335,26 @@ class Settle:
         except Exception:                                       # noqa: BLE001
             return {"verdict": "reject", "objection": "verifier output unparseable"}
 
+    def _commit_verified_aliases(self, pending: list[tuple[str, str, str, str, str]],
+                                 matching: dict[str, list[str]]) -> None:
+        """Learn only from matches that survived the final ledger gate.
+
+        Pending entries are (invoice_id, payer, customer_id, customer_name,
+        reasoning). An unsafe or withdrawn match must never teach future runs.
+        """
+        if self.memory is None:
+            return
+        for inv_id, payer, customer_id, customer_name, reasoning in pending:
+            if inv_id not in matching:
+                continue
+            if self.memory.remember(
+                payer, customer_id, customer_name,
+                source="verifier_pass",
+                evidence=f"{inv_id}: {reasoning[:200]}",
+            ):
+                trace_event("memory_write", invoice=inv_id,
+                            alias=payer, customer=customer_id)
+
     # -- whole case -------------------------------------------------------
     def run(self, case: Case) -> dict:
         t0 = time.time()
@@ -342,6 +362,7 @@ class Settle:
         matching: dict[str, list[str]] = {}
         exceptions: list[dict] = []
         routes: dict[str, int] = {}
+        pending_aliases: list[tuple[str, str, str, str, str]] = []
 
         # Process least-ambiguous invoices first so confident matches claim
         # their transactions before contested ones do.
@@ -359,14 +380,10 @@ class Settle:
                 if (self.memory is not None
                         and res.get("payer_identity")
                         and float(res.get("confidence", 0)) >= MEMORY_WRITE_CONFIDENCE):
-                    is_new = self.memory.remember(
-                        res["payer_identity"], inv.customer_id, inv.customer_name,
-                        source="verifier_pass",
-                        evidence=f"{inv.invoice_id}: {res.get('reasoning', '')[:200]}")
-                    if is_new:
-                        trace_event("memory_write", invoice=inv.invoice_id,
-                                    alias=res["payer_identity"],
-                                    customer=inv.customer_id)
+                    pending_aliases.append((
+                        inv.invoice_id, res["payer_identity"], inv.customer_id,
+                        inv.customer_name, res.get("reasoning", ""),
+                    ))
             else:
                 exceptions.append({
                     "invoice_id": inv.invoice_id,
@@ -403,6 +420,11 @@ class Settle:
             ledger_ok = report.ok
             trace_event("ledger_gate", case=case.case_id, ok=report.ok,
                         withdrawn=gate_repairs, summary=report.summary()[:400])
+
+        # Side effects occur only after the final ledger gate has passed.
+        # Diagnostic --no-gate runs never learn identities.
+        if self.use_gate and ledger_ok:
+            self._commit_verified_aliases(pending_aliases, matching)
 
         return {
             "case_id": case.case_id,
