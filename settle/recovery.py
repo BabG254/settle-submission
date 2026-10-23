@@ -40,6 +40,8 @@ def recover_approvals(pred_path: Path, data_root: Path, db_path: Path) -> dict:
                     if previous is not None and previous != inv.customer_id:
                         conflicts.append(inv_id + ": alias conflict; manual review required")
                         continue
+                    if previous == inv.customer_id:
+                        continue  # replay is idempotent; do not inflate usage
                     if memory.remember(payer, inv.customer_id, inv.customer_name,
                                        "human_approval", "recovered approved " + inv_id):
                         recovered += 1
