@@ -15,13 +15,13 @@ import argparse
 import json
 from pathlib import Path
 
-from .approval_safety import ApprovalError, atomic_write_json, validate_approval
+from .approval_safety import ApprovalError, atomic_write_json, validate_approval, locked_prediction
 from .memory import AliasMemory
 from .schema import read_case
 from .tools import check_ledger
 
 
-def main() -> None:
+def _main() -> None:
     ap = argparse.ArgumentParser(description="Approve or reject a queued exception.")
     ap.add_argument("--pred", type=Path, required=True)
     ap.add_argument("--data", type=Path, required=True)
@@ -92,6 +92,16 @@ def main() -> None:
     for p in written:
         print(f"  learned: {p!r} -> {inv.customer_name} ({inv.customer_id})")
     print(f"  alias store now holds {memory.size()} approved identities")
+
+
+def main() -> None:
+    # Acquire a per-prediction lock before loading current state, and hold it
+    # through validation, durable write, and alias updates.
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--pred", type=Path, required=True)
+    args, _ = parser.parse_known_args()
+    with locked_prediction(args.pred):
+        _main()
 
 
 if __name__ == "__main__":
